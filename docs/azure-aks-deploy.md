@@ -6,6 +6,48 @@ This project is ready to deploy to Azure Kubernetes Service (AKS) with:
 - `apps/api/Dockerfile`
 - `deploy/helm/helm-try`
 - `deploy/helm/helm-try/values-azure.yaml`
+- `.github/workflows/deploy-aks.yml`
+
+## GitHub Actions auto-deploy
+
+This repo now includes a GitHub Actions workflow at `.github/workflows/deploy-aks.yml`.
+
+It runs automatically on every push to `main` and also supports manual runs through `workflow_dispatch`.
+
+The workflow:
+
+- logs in to Azure with GitHub OIDC
+- builds and pushes `web` and `api` images to ACR
+- fetches the AKS ingress public IP
+- runs `helm upgrade --install`
+- waits for both Deployments to roll out
+
+### GitHub secrets you need
+
+Create these repository or environment secrets in GitHub:
+
+- `AZURE_CLIENT_ID`
+- `AZURE_TENANT_ID`
+- `AZURE_SUBSCRIPTION_ID`
+- `AZURE_RESOURCE_GROUP`
+- `AZURE_AKS_CLUSTER_NAME`
+- `AZURE_ACR_NAME`
+- `AKS_NAMESPACE`
+
+### Azure OIDC setup
+
+The workflow uses `azure/login@v2` with OpenID Connect instead of a stored Azure password.
+
+Create an Azure AD app or user-assigned managed identity, then add a federated credential that trusts your GitHub repository and `main` branch. GitHub’s OIDC docs and Azure’s action docs cover this flow:
+
+- `azure/login@v2`: https://github.com/azure/login
+- `azure/aks-set-context@v4`: https://github.com/Azure/aks-set-context
+
+After that, give the identity access to:
+
+- push images to ACR
+- read AKS credentials
+- deploy into your AKS cluster
 
 ## 1. Set your variables
 

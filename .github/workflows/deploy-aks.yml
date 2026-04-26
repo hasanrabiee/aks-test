@@ -1,0 +1,122 @@
+name: Deploy To AKS
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: production-aks
+  cancel-in-progress: true
+
+env:
+  RESOURCE_GROUP: ${{ secrets.AZURE_RESOURCE_GROUP }}
+  CLUSTER_NAME: ${{ secrets.AZURE_AKS_CLUSTER_NAME }}
+  ACR_NAME: ${{ secrets.AZURE_ACR_NAME }}
+  NAMESPACE: ${{ secrets.AKS_NAMESPACE }}
+  RELEASE_NAME: helm-try
+  WEB_IMAGE_NAME: helm-try-web
+  API_IMAGE_NAME: helm-try-api
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4.3.0
+        with:
+          version: v3.17.0
+
+      - name: Log in to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Set up kubelogin
+        uses: azure/use-kubelogin@v1
+        with:
+          kubelogin-version: v0.0.24
+
+      - name: Set AKS context
+        uses: azure/aks-set-context@v4
+        with:
+          resource-group: ${{ env.RESOURCE_GROUP }}
+          cluster-name: ${{ env.CLUSTER_NAME }}
+          admin: "false"
+          use-kubelogin: "true"
+
+      - name: Set deployment variables
+        run: |
+          echo "IMAGE_TAG=${GITHUB_SHA}" >> "$GITHUB_ENV"
+          echo "ACR_LOGIN_SERVER=${ACR_NAME}.azurecr.io" >> "$GITHUB_ENV"
+
+      - name: Log in to Azure Container Registry
+        run: az acr login --name "$ACR_NAME"
+
+      - name: Build and push web image
+        run: |
+          docker build \
+            -f apps/web/Dockerfile \
+            -t "$ACR_LOGIN_SERVER/$WEB_IMAGE_NAME:$IMAGE_TAG" \
+            .
+          docker push "$ACR_LOGIN_SERVER/$WEB_IMAGE_NAME:$IMAGE_TAG"
+
+      - name: Build and push api image
+        run: |
+          docker build \
+            -f apps/api/Dockerfile \
+            -t "$ACR_LOGIN_SERVER/$API_IMAGE_NAME:$IMAGE_TAG" \
+            .
+          docker push "$ACR_LOGIN_SERVER/$API_IMAGE_NAME:$IMAGE_TAG"
+
+      - name: Ensure namespace exists
+        run: |
+          kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Resolve ingress IP
+        run: |
+          for attempt in $(seq 1 30); do
+            INGRESS_IP="$(kubectl get service -n app-routing-system nginx -o jsonpath='{.status.loadBalancer.ingress[0].ip}')"
+            if [ -n "$INGRESS_IP" ]; then
+              echo "INGRESS_IP=$INGRESS_IP" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Timed out waiting for the AKS ingress public IP" >&2
+          exit 1
+
+      - name: Deploy with Helm
+        run: |
+          helm upgrade --install "$RELEASE_NAME" deploy/helm/helm-try \
+            --namespace "$NAMESPACE" \
+            -f deploy/helm/helm-try/values-azure.yaml \
+            --set web.image.repository="$ACR_LOGIN_SERVER/$WEB_IMAGE_NAME" \
+            --set web.image.tag="$IMAGE_TAG" \
+            --set api.image.repository="$ACR_LOGIN_SERVER/$API_IMAGE_NAME" \
+            --set api.image.tag="$IMAGE_TAG" \
+            --set web.env.NEXT_PUBLIC_API_BASE_URL="http://$INGRESS_IP/api" \
+            --set ingress.web.host="" \
+            --set ingress.api.host=""
+
+      - name: Verify rollout
+        run: |
+          kubectl rollout status deployment/"$RELEASE_NAME"-helm-try-web -n "$NAMESPACE" --timeout=5m
+          kubectl rollout status deployment/"$RELEASE_NAME"-helm-try-api -n "$NAMESPACE" --timeout=5m
+
+      - name: Show deployment endpoints
+        run: |
+          echo "Web: http://$INGRESS_IP/"
+          echo "API: http://$INGRESS_IP/api/health"
