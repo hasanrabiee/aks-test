@@ -10,7 +10,7 @@ export default function HomePage() {
         <span className="eyebrow">Turborepo Starter</span>
         <h1>Next.js frontend + NestJS API</h1>
         <p>
-          Your monorepo is ready. Start both apps with <code>pnpm dev</code>.
+          Your monorepo is ready !! Check the pipline !!. Start both apps with <code>pnpm dev</code>.
         </p>
         <a href={`${apiBaseUrl}/health`} target="_blank" rel="noreferrer">
           Check the API health endpoint
