@@ -1,0 +1,212 @@
+name: Deploy PR Preview
+
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - closed
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+concurrency:
+  group: pr-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  RESOURCE_GROUP: ${{ secrets.AZURE_RESOURCE_GROUP }}
+  CLUSTER_NAME: ${{ secrets.AZURE_AKS_CLUSTER_NAME }}
+  ACR_NAME: ${{ secrets.AZURE_ACR_NAME }}
+  NAMESPACE: ${{ secrets.AKS_PR_NAMESPACE }}
+  WEB_IMAGE_NAME: helm-try-web
+  API_IMAGE_NAME: helm-try-api
+
+jobs:
+  preview:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    environment: pr-preview
+
+    steps:
+      - name: Check out repository
+        if: github.event.action != 'closed'
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4.3.0
+        with:
+          version: v3.17.0
+
+      - name: Log in to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Set up kubelogin
+        uses: azure/use-kubelogin@v1
+        with:
+          kubelogin-version: v0.0.24
+
+      - name: Set AKS context
+        uses: azure/aks-set-context@v4
+        with:
+          resource-group: ${{ env.RESOURCE_GROUP }}
+          cluster-name: ${{ env.CLUSTER_NAME }}
+          admin: "false"
+          use-kubelogin: "true"
+
+      - name: Set preview variables
+        run: |
+          echo "PR_NUMBER=${{ github.event.pull_request.number }}" >> "$GITHUB_ENV"
+          echo "SHORT_SHA=$(echo "${GITHUB_SHA}" | cut -c1-7)" >> "$GITHUB_ENV"
+          echo "IMAGE_TAG=pr-${{ github.event.pull_request.number }}-${GITHUB_SHA}" >> "$GITHUB_ENV"
+          echo "ACR_LOGIN_SERVER=${ACR_NAME}.azurecr.io" >> "$GITHUB_ENV"
+          echo "RELEASE_NAME=pr-${{ github.event.pull_request.number }}" >> "$GITHUB_ENV"
+
+      - name: Ensure namespace exists
+        run: |
+          kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Resolve ingress IP
+        run: |
+          for attempt in $(seq 1 30); do
+            INGRESS_IP="$(kubectl get service -n app-routing-system nginx -o jsonpath='{.status.loadBalancer.ingress[0].ip}')"
+            if [ -n "$INGRESS_IP" ]; then
+              echo "INGRESS_IP=$INGRESS_IP" >> "$GITHUB_ENV"
+              echo "INGRESS_IP_DASH=${INGRESS_IP//./-}" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Timed out waiting for the AKS ingress public IP" >&2
+          exit 1
+
+      - name: Set preview hostnames
+        if: github.event.action != 'closed'
+        run: |
+          echo "WEB_HOST=pr-${PR_NUMBER}.${INGRESS_IP_DASH}.nip.io" >> "$GITHUB_ENV"
+          echo "API_HOST=api-pr-${PR_NUMBER}.${INGRESS_IP_DASH}.nip.io" >> "$GITHUB_ENV"
+
+      - name: Log in to Azure Container Registry
+        if: github.event.action != 'closed'
+        run: az acr login --name "$ACR_NAME"
+
+      - name: Build and push web image
+        if: github.event.action != 'closed'
+        run: |
+          docker build \
+            -f apps/web/Dockerfile \
+            -t "$ACR_LOGIN_SERVER/$WEB_IMAGE_NAME:$IMAGE_TAG" \
+            .
+          docker push "$ACR_LOGIN_SERVER/$WEB_IMAGE_NAME:$IMAGE_TAG"
+
+      - name: Build and push api image
+        if: github.event.action != 'closed'
+        run: |
+          docker build \
+            -f apps/api/Dockerfile \
+            -t "$ACR_LOGIN_SERVER/$API_IMAGE_NAME:$IMAGE_TAG" \
+            .
+          docker push "$ACR_LOGIN_SERVER/$API_IMAGE_NAME:$IMAGE_TAG"
+
+      - name: Deploy preview with Helm
+        if: github.event.action != 'closed'
+        run: |
+          helm upgrade --install "$RELEASE_NAME" deploy/helm/helm-try \
+            --namespace "$NAMESPACE" \
+            -f deploy/helm/helm-try/values-azure.yaml \
+            --set web.image.repository="$ACR_LOGIN_SERVER/$WEB_IMAGE_NAME" \
+            --set web.image.tag="$IMAGE_TAG" \
+            --set api.image.repository="$ACR_LOGIN_SERVER/$API_IMAGE_NAME" \
+            --set api.image.tag="$IMAGE_TAG" \
+            --set web.image.pullPolicy="Always" \
+            --set api.image.pullPolicy="Always" \
+            --set web.env.NEXT_PUBLIC_API_BASE_URL="http://$API_HOST/api" \
+            --set ingress.web.host="$WEB_HOST" \
+            --set ingress.api.host="$API_HOST"
+
+      - name: Verify preview rollout
+        if: github.event.action != 'closed'
+        run: |
+          kubectl rollout status deployment/"$RELEASE_NAME"-helm-try-web -n "$NAMESPACE" --timeout=5m
+          kubectl rollout status deployment/"$RELEASE_NAME"-helm-try-api -n "$NAMESPACE" --timeout=5m
+
+      - name: Comment preview URL
+        if: github.event.action != 'closed'
+        uses: actions/github-script@v7
+        env:
+          WEB_URL: http://${{ env.WEB_HOST }}
+          API_URL: http://${{ env.API_HOST }}/api/health
+          RELEASE_NAME: ${{ env.RELEASE_NAME }}
+          NAMESPACE: ${{ env.NAMESPACE }}
+        with:
+          script: |
+            const marker = "<!-- pr-preview-url -->";
+            const body = `${marker}
+            Preview environment is ready.
+
+            Web: ${process.env.WEB_URL}
+            API health: ${process.env.API_URL}
+            Release: \`${process.env.RELEASE_NAME}\`
+            Namespace: \`${process.env.NAMESPACE}\``;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number
+            });
+
+            const existing = comments.find((comment) => comment.body.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body
+              });
+            }
+
+      - name: Delete preview release
+        if: github.event.action == 'closed'
+        run: |
+          helm uninstall "$RELEASE_NAME" --namespace "$NAMESPACE" || true
+
+      - name: Comment preview cleanup
+        if: github.event.action == 'closed'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const marker = "<!-- pr-preview-url -->";
+            const body = `${marker}
+            Preview environment has been removed for PR #${context.issue.number}.`;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number
+            });
+
+            const existing = comments.find((comment) => comment.body.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body
+              });
+            }

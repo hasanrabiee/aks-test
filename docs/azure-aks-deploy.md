@@ -7,6 +7,7 @@ This project is ready to deploy to Azure Kubernetes Service (AKS) with:
 - `deploy/helm/helm-try`
 - `deploy/helm/helm-try/values-azure.yaml`
 - `.github/workflows/deploy-aks.yml`
+- `.github/workflows/deploy-pr-preview.yml`
 
 ## GitHub Actions auto-deploy
 
@@ -33,6 +34,7 @@ Create these repository or environment secrets in GitHub:
 - `AZURE_AKS_CLUSTER_NAME`
 - `AZURE_ACR_NAME`
 - `AKS_NAMESPACE`
+- `AKS_PR_NAMESPACE`
 
 ### Azure OIDC setup
 
@@ -48,6 +50,36 @@ After that, give the identity access to:
 - push images to ACR
 - read AKS credentials
 - deploy into your AKS cluster
+
+## Pull request previews
+
+This repo also includes `.github/workflows/deploy-pr-preview.yml` for dynamic preview environments on pull requests.
+
+It creates one Helm release per PR:
+
+- release name: `pr-<number>`
+- web hostname: `pr-<number>.<ingress-ip>.nip.io`
+- api hostname: `api-pr-<number>.<ingress-ip>.nip.io`
+
+For example, if your ingress IP is `20.73.104.133` and the PR number is `12`:
+
+- web: `http://pr-12.20-73-104-133.nip.io`
+- api: `http://api-pr-12.20-73-104-133.nip.io/api/health`
+
+The workflow updates the preview on every PR push and removes it automatically when the PR is closed.
+
+### Important Azure OIDC note for PR previews
+
+The preview workflow uses the GitHub environment `pr-preview`, so Azure needs a second federated credential whose subject matches:
+
+- `repo:<owner>/<repo>:environment:pr-preview`
+
+That is separate from your production environment credential.
+
+### Preview limitations
+
+- This workflow only deploys PRs created from branches inside the same repository. Forked PRs are skipped because GitHub does not expose deployment secrets safely to them.
+- The `nip.io` hostnames are convenient for previews, but they are HTTP-only in this setup unless you add your own TLS strategy later.
 
 ## 1. Set your variables
 
