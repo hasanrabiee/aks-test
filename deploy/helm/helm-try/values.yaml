@@ -1,0 +1,55 @@
+nameOverride: ""
+fullnameOverride: ""
+
+imagePullSecrets: []
+
+web:
+  replicaCount: 1
+  image:
+    repository: helmtryacr.azurecr.io/helm-try-web
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 80
+    targetPort: 3000
+  env:
+    NEXT_PUBLIC_API_BASE_URL: https://api.example.com
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+api:
+  replicaCount: 1
+  image:
+    repository: helmtryacr.azurecr.io/helm-try-api
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 80
+    targetPort: 3001
+  env: {}
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+ingress:
+  web:
+    enabled: true
+    className: nginx
+    annotations: {}
+    host: ""
+    path: /
+    pathType: Prefix
+    tls: []
+  api:
+    enabled: true
+    className: nginx
+    annotations: {}
+    host: ""
+    path: /api
+    pathType: Prefix
+    tls: []

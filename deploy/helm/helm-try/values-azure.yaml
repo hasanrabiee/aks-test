@@ -1,0 +1,26 @@
+web:
+  image:
+    repository: <acr-name>.azurecr.io/helm-try-web
+    tag: latest
+  env:
+    NEXT_PUBLIC_API_BASE_URL: http://<aks-ingress-ip>/api
+
+api:
+  image:
+    repository: <acr-name>.azurecr.io/helm-try-api
+    tag: latest
+
+ingress:
+  web:
+    enabled: true
+    className: webapprouting.kubernetes.azure.com
+    annotations: {}
+    host: ""
+    tls: []
+  api:
+    enabled: true
+    className: webapprouting.kubernetes.azure.com
+    annotations: {}
+    host: ""
+    path: /api
+    tls: []

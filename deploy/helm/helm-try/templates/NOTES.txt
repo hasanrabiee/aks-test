@@ -1,0 +1,9 @@
+1. Get the deployed web ingress:
+   kubectl get ingress {{ include "helm-try.webName" . }} -n {{ .Release.Namespace }}
+
+2. Get the deployed api ingress:
+   kubectl get ingress {{ include "helm-try.apiName" . }} -n {{ .Release.Namespace }}
+
+3. Check rollout status:
+   kubectl rollout status deployment/{{ include "helm-try.webName" . }} -n {{ .Release.Namespace }}
+   kubectl rollout status deployment/{{ include "helm-try.apiName" . }} -n {{ .Release.Namespace }}

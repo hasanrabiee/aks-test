@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "helm-try.webName" . }}
+  labels:
+    app.kubernetes.io/name: web
+    {{- include "helm-try.selectorLabels" . | nindent 4 }}
+    {{- include "helm-try.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.web.service.type }}
+  selector:
+    app.kubernetes.io/name: web
+    {{- include "helm-try.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.web.service.port }}
+      targetPort: http
+      protocol: TCP

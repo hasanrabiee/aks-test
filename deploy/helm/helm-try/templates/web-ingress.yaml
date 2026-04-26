@@ -1,0 +1,34 @@
+{{- if .Values.ingress.web.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "helm-try.webName" . }}
+  labels:
+    app.kubernetes.io/name: web
+    {{- include "helm-try.selectorLabels" . | nindent 4 }}
+    {{- include "helm-try.labels" . | nindent 4 }}
+  {{- with .Values.ingress.web.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.web.className }}
+  rules:
+    -
+      {{- if .Values.ingress.web.host }}
+      host: {{ .Values.ingress.web.host | quote }}
+      {{- end }}
+      http:
+        paths:
+          - path: {{ .Values.ingress.web.path }}
+            pathType: {{ .Values.ingress.web.pathType }}
+            backend:
+              service:
+                name: {{ include "helm-try.webName" . }}
+                port:
+                  number: {{ .Values.web.service.port }}
+  {{- if and .Values.ingress.web.host .Values.ingress.web.tls }}
+  tls:
+    {{- toYaml .Values.ingress.web.tls | nindent 4 }}
+  {{- end }}
+{{- end }}

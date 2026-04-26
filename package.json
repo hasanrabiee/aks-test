@@ -1,0 +1,19 @@
+{
+  "name": "helm-try",
+  "private": true,
+  "packageManager": "pnpm@10.17.0",
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "dev:web": "pnpm --filter web dev",
+    "dev:api": "pnpm --filter api dev",
+    "docker:build:web": "docker build -f apps/web/Dockerfile -t helm-try-web:local .",
+    "docker:build:api": "docker build -f apps/api/Dockerfile -t helm-try-api:local .",
+    "helm:lint": "helm lint deploy/helm/helm-try",
+    "typecheck": "turbo run typecheck"
+  },
+  "devDependencies": {
+    "turbo": "^2.5.3",
+    "typescript": "^5.9.3"
+  }
+}
